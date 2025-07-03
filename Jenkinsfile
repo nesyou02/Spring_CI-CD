@@ -10,7 +10,7 @@ pipeline {
     DOCKER_CRED = 'dockerhub'
     SONAR_TOKEN = credentials('sonar-token')
     SONAR_URL   = 'http://localhost:9000'
-    NEXUS_URL   = 'http://172.16.159.134:8081/repository/maven-snapshots/'
+    NEXUS_URL   = 'http://localhost:8081/repository/maven-snapshots/'
   }
 
   stages {
@@ -42,7 +42,7 @@ pipeline {
           timeout(time: 2, unit: 'MINUTES') {
             script {
               def qg = waitForQualityGate()
-              echo "Quality Gate status: ${qg.status}"
+              echo "Quality Gate: ${qg.status}"
               if (qg.status != 'OK') {
                 currentBuild.result = 'UNSTABLE'
               }
@@ -59,13 +59,13 @@ pipeline {
           usernameVariable: 'DOCKER_USER',
           passwordVariable: 'DOCKER_PASS'
         )]) {
-          sh """
-            echo \$DOCKER_PASS | docker login -u \$DOCKER_USER --password-stdin
-            docker build -t \$DOCKER_USER/demoapp:\${GIT_COMMIT} .
-            docker push \$DOCKER_USER/demoapp:\${GIT_COMMIT}
-            docker tag \$DOCKER_USER/demoapp:\${GIT_COMMIT} \$DOCKER_USER/demoapp:latest
-            docker push \$DOCKER_USER/demoapp:latest
-          """
+          sh '''
+            echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin
+            docker build -t $DOCKER_USER/demoapp:${GIT_COMMIT} .
+            docker push $DOCKER_USER/demoapp:${GIT_COMMIT}
+            docker tag $DOCKER_USER/demoapp:${GIT_COMMIT} $DOCKER_USER/demoapp:latest
+            docker push $DOCKER_USER/demoapp:latest
+          '''
         }
       }
     }
@@ -74,33 +74,39 @@ pipeline {
       steps {
         echo '🔍 Scanning image with Trivy'
         catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
-          sh "trivy image --exit-code 1 --severity HIGH,CRITICAL \$DOCKER_USER/demoapp:\${GIT_COMMIT}"
+          withCredentials([usernamePassword(
+            credentialsId: DOCKER_CRED,
+            usernameVariable: 'DOCKER_USER',
+            passwordVariable: 'DOCKER_PASS'
+          )]) {
+            sh "trivy image --exit-code 1 --severity HIGH,CRITICAL $DOCKER_USER/demoapp:${GIT_COMMIT}"
+          }
         }
       }
     }
 
     stage('Deploy to Nexus') {
       steps {
-        echo '📦 Deploying JAR to Nexus'
+        echo '📦 Déploiement du JAR vers Nexus (maven-snapshots)'
         withCredentials([usernamePassword(
           credentialsId: 'nexus-credentials',
           usernameVariable: 'NEXUS_USER',
           passwordVariable: 'NEXUS_PASS'
         )]) {
-          sh """
-            cat > settings.xml <<EOF
+          // Génère un settings.xml temporaire
+          sh '''cat > settings.xml <<EOF
 <settings>
   <servers>
     <server>
       <id>nexus</id>
-      <username>\$NEXUS_USER</username>
-      <password>\$NEXUS_PASS</password>
+      <username>$NEXUS_USER</username>
+      <password>$NEXUS_PASS</password>
     </server>
   </servers>
 </settings>
-EOF
-            mvn deploy -B -s settings.xml -DaltDeploymentRepository=nexus::${NEXUS_URL}
-          """
+EOF'''
+          // Déploie sur Nexus
+          sh "mvn deploy -B -s settings.xml -DaltDeploymentRepository=nexus::${NEXUS_URL}"
         }
       }
     }
