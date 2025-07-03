@@ -10,7 +10,6 @@ pipeline {
     DOCKER_CRED = 'dockerhub'
     SONAR_TOKEN = credentials('sonar-token')
     SONAR_URL   = 'http://localhost:9000'
-    NEXUS_CRED  = 'nexus-credentials'
     NEXUS_URL   = 'http://172.16.159.134:8081/repository/maven-snapshots/'
   }
 
@@ -30,9 +29,8 @@ pipeline {
     stage('SonarQube Analysis') {
       steps {
         catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
-          // 'demo' doit correspondre au nom dans Manage Jenkins → SonarQube installations
-          withSonarQubeEnv('demo') {
-            sh "mvn sonar:sonar -Dsonar.projectKey=demo -Dsonar.host.url=${SONAR_URL} -Dsonar.login=${SONAR_TOKEN}"
+          withSonarQubeEnv('MySonar') {
+            sh "mvn sonar:sonar -Dsonar.host.url=${SONAR_URL} -Dsonar.login=${SONAR_TOKEN}"
           }
         }
       }
@@ -40,12 +38,14 @@ pipeline {
 
     stage('Quality Gate') {
       steps {
-        timeout(time: 2, unit: 'MINUTES') {
-          script {
-            def qg = waitForQualityGate()
-            echo "Quality Gate: ${qg.status}"
-            if (qg.status != 'OK') {
-              currentBuild.result = 'UNSTABLE'
+        catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
+          timeout(time: 2, unit: 'MINUTES') {
+            script {
+              def qg = waitForQualityGate()
+              echo "Quality Gate status: ${qg.status}"
+              if (qg.status != 'OK') {
+                currentBuild.result = 'UNSTABLE'
+              }
             }
           }
         }
@@ -55,57 +55,52 @@ pipeline {
     stage('Docker Login, Build & Push') {
       steps {
         withCredentials([usernamePassword(
-          credentialsId: "${DOCKER_CRED}",
+          credentialsId: DOCKER_CRED,
           usernameVariable: 'DOCKER_USER',
           passwordVariable: 'DOCKER_PASS'
         )]) {
-          sh '''
-            echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin
-            docker build -t $DOCKER_USER/demoapp:${GIT_COMMIT} .
-            docker push $DOCKER_USER/demoapp:${GIT_COMMIT}
-            docker tag $DOCKER_USER/demoapp:${GIT_COMMIT} $DOCKER_USER/demoapp:latest
-            docker push $DOCKER_USER/demoapp:latest
-          '''
+          sh """
+            echo \$DOCKER_PASS | docker login -u \$DOCKER_USER --password-stdin
+            docker build -t \$DOCKER_USER/demoapp:\${GIT_COMMIT} .
+            docker push \$DOCKER_USER/demoapp:\${GIT_COMMIT}
+            docker tag \$DOCKER_USER/demoapp:\${GIT_COMMIT} \$DOCKER_USER/demoapp:latest
+            docker push \$DOCKER_USER/demoapp:latest
+          """
         }
       }
     }
 
     stage('Trivy Scan') {
       steps {
-        echo '🔍 Scanning image with Trivy (HIGH & CRITICAL)'
-        withCredentials([usernamePassword(
-          credentialsId: "${DOCKER_CRED}",
-          usernameVariable: 'DOCKER_USER',
-          passwordVariable: 'DOCKER_PASS'
-        )]) {
-          sh '''
-            docker pull $DOCKER_USER/demoapp:${GIT_COMMIT}
-            trivy image --exit-code 1 --severity HIGH,CRITICAL $DOCKER_USER/demoapp:${GIT_COMMIT}
-          '''
+        echo '🔍 Scanning image with Trivy'
+        catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
+          sh "trivy image --exit-code 1 --severity HIGH,CRITICAL \$DOCKER_USER/demoapp:\${GIT_COMMIT}"
         }
       }
     }
 
     stage('Deploy to Nexus') {
       steps {
-        echo '📦 Déploiement du JAR vers Nexus (maven-snapshots)'
+        echo '📦 Deploying JAR to Nexus'
         withCredentials([usernamePassword(
-          credentialsId: "${NEXUS_CRED}",
+          credentialsId: 'nexus-credentials',
           usernameVariable: 'NEXUS_USER',
           passwordVariable: 'NEXUS_PASS'
         )]) {
-          sh '''cat > settings.xml <<EOF
+          sh """
+            cat > settings.xml <<EOF
 <settings>
   <servers>
     <server>
       <id>nexus</id>
-      <username>${NEXUS_USER}</username>
-      <password>${NEXUS_PASS}</password>
+      <username>\$NEXUS_USER</username>
+      <password>\$NEXUS_PASS</password>
     </server>
   </servers>
 </settings>
-EOF'''
-          sh "mvn deploy -B -s settings.xml -DaltDeploymentRepository=nexus::${NEXUS_URL}"
+EOF
+            mvn deploy -B -s settings.xml -DaltDeploymentRepository=nexus::${NEXUS_URL}
+          """
         }
       }
     }
