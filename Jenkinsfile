@@ -30,6 +30,7 @@ pipeline {
     stage('SonarQube Analysis') {
       steps {
         catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
+          // 'demo' doit correspondre au nom dans Manage Jenkins → SonarQube installations
           withSonarQubeEnv('demo') {
             sh "mvn sonar:sonar -Dsonar.projectKey=demo -Dsonar.host.url=${SONAR_URL} -Dsonar.login=${SONAR_TOKEN}"
           }
@@ -53,7 +54,11 @@ pipeline {
 
     stage('Docker Login, Build & Push') {
       steps {
-        withCredentials([usernamePassword(credentialsId: "${DOCKER_CRED}", usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+        withCredentials([usernamePassword(
+          credentialsId: "${DOCKER_CRED}",
+          usernameVariable: 'DOCKER_USER',
+          passwordVariable: 'DOCKER_PASS'
+        )]) {
           sh '''
             echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin
             docker build -t $DOCKER_USER/demoapp:${GIT_COMMIT} .
@@ -68,7 +73,11 @@ pipeline {
     stage('Trivy Scan') {
       steps {
         echo '🔍 Scanning image with Trivy (HIGH & CRITICAL)'
-        withCredentials([usernamePassword(credentialsId: "${DOCKER_CRED}", usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+        withCredentials([usernamePassword(
+          credentialsId: "${DOCKER_CRED}",
+          usernameVariable: 'DOCKER_USER',
+          passwordVariable: 'DOCKER_PASS'
+        )]) {
           sh '''
             docker pull $DOCKER_USER/demoapp:${GIT_COMMIT}
             trivy image --exit-code 1 --severity HIGH,CRITICAL $DOCKER_USER/demoapp:${GIT_COMMIT}
@@ -79,8 +88,12 @@ pipeline {
 
     stage('Deploy to Nexus') {
       steps {
-        echo '📦 Deploying JAR to Nexus snapshots'
-        withCredentials([usernamePassword(credentialsId: "${NEXUS_CRED}", usernameVariable: 'NEXUS_USER', passwordVariable: 'NEXUS_PASS')]) {
+        echo '📦 Déploiement du JAR vers Nexus (maven-snapshots)'
+        withCredentials([usernamePassword(
+          credentialsId: "${NEXUS_CRED}",
+          usernameVariable: 'NEXUS_USER',
+          passwordVariable: 'NEXUS_PASS'
+        )]) {
           sh '''cat > settings.xml <<EOF
 <settings>
   <servers>
@@ -96,13 +109,11 @@ EOF'''
         }
       }
     }
-
-  } // end stages
+  }
 
   post {
     success  { echo '✅ Pipeline terminé avec succès' }
     unstable { echo '⚠️ Pipeline instable (vérifier les logs)' }
     failure  { echo '❌ Pipeline échoué' }
   }
-
-} // end pipeline
+}
