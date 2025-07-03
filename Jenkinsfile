@@ -106,7 +106,7 @@ pipeline {
 </settings>
 EOF'''
           // Déploie sur Nexus
-          sh "mvn deploy -B -s settings.xml -DaltDeploymentRepository=nexus::${NEXUS_URL}"
+          sh "mvn deploy -B -s settings.xml -DaltDeploymentRepository=nexus::default::${NEXUS_URL}"
         }
       }
     }
